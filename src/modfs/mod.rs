@@ -192,7 +192,14 @@ impl ModFs {
                 debug!("mods:/ size '{}' {:#x} bytes from blob", path.display(), len);
                 return Some(len);
             }
-            let base = self.patch.get(path).map(|e| e.size)?;
+            let base = match self.patch.get(path).map(|e| e.size) {
+                Some(size) => size,
+                None if !self.handlers.handlers_for_hash(hash).is_empty() => {
+                    let arc = crate::resource::arc();
+                    arc.get_file_data_from_hash(hash, config::region()).ok()?.decomp_size as usize
+                },
+                None => return None,
+            };
             return Some(self.handlers.patched_size_for_hash(hash, base).unwrap_or(base));
         }
         self.patch.get(path).map(|e| e.size)
