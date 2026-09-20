@@ -216,22 +216,23 @@ fn init_account() {
     unsafe { nn::account::Initialize() }
 }
 
-#[cfg(feature = "online")]
+#[cfg(feature = "ui")]
 fn check_for_changelog() {
-    if !crate::utils::env::is_emulator() {
-        if let Ok(changelog) = std::fs::read_to_string("sd:/ultimate/arcropolis/changelog.toml") {
-            match toml::from_str(&changelog) {
-                Ok(changelog) => {
-                    menus::display_update_page(&changelog);
-                    if let Err(err) = std::fs::remove_file("sd:/ultimate/arcropolis/changelog.toml") {
-                        warn!("Could not delete the changelog file, it will show again on the next boot: {}", err);
-                    }
-                },
-                Err(_) => {
-                    warn!("Changelog could not be parsed. Is the file malformed?");
-                },
+    let Ok(changelog) = std::fs::read_to_string("sd:/ultimate/arcropolis/changelog.toml") else {
+        return;
+    };
+
+    match toml::from_str::<arcadia::data::changelog::MainEntry>(&changelog) {
+        Ok(changelog) => {
+            arcadia::show_changelog(changelog, false);
+
+            if let Err(err) = std::fs::remove_file("sd:/ultimate/arcropolis/changelog.toml") {
+                warn!("Could not delete the changelog file, it will show again on the next boot: {}", err);
             }
-        }
+        },
+        Err(_) => {
+            warn!("Changelog could not be parsed. Is the file malformed?");
+        },
     }
 }
 
@@ -248,44 +249,80 @@ fn get_news_data() {
     }
 }
 
-#[cfg(feature = "ui")]
-fn check_input_on_boot() {
-    if !crate::utils::env::is_emulator() {
-        // Open the ARCropolis menu if Minus is held before mod discovery
-        if ninput::any::is_down(ninput::Buttons::PLUS) {
-            menus::show_main_menu();
-        }
-    }
-}
+// #[cfg(feature = "ui")]
+// fn check_input_on_boot() {
+//         // Open the ARCropolis menu if Minus is held before mod discovery
+//     if !utils::env::is_emulator() && ninput::any::is_down(ninput::Buttons::PLUS) {
+//         arcadia::request(arcadia::Request::Hub);
+//     }
+// }
 
 #[cfg(feature = "online")]
 fn check_for_update() {
     // Changed to pre because prerelease doesn't compile
     if !semver::Version::from_str(env!("CARGO_PKG_VERSION")).unwrap().pre.is_empty() {
-        update::check_for_updates(config::beta_updates(), |_, _, _| true);
+        if let Some(pending) = update::find_update(config::beta_updates()) {
+            update::install(pending);
+        }
     }
 
-    if config::auto_update_enabled() {
-        update::check_for_updates(config::beta_updates(), |update_kind, date, description| {
-            let (contributors, entries) = menus::get_entries_from_md(description);
-            let main_entry = menus::MainEntry {
-                title: format!("ARCropolis update: Ver. {}", update_kind),
-                date,
-                description: "A new version of ARCropolis was detected!<br/>Please read the following changelog.".to_string(),
-                entries,
-                contributors,
-            };
+    #[cfg(feature = "ui")]
+    offer_update();
+}
 
-            menus::display_update_page(&main_entry)
-            // skyline_web::Dialog::no_yes(format!("{} has been detected. Do you want to install it?", update_kind))
-        });
+#[cfg(all(feature = "online", feature = "ui"))]
+fn offer_update() {
+    if !config::auto_update_enabled() {
+        return;
     }
+
+    let Some(pending) = update::find_update(config::beta_updates()) else {
+        return;
+    };
+
+    let (contributors, entries) = arcadia::data::changelog::from_release_markdown(&pending.body);
+    let notes = arcadia::data::changelog::MainEntry {
+        title: format!("ARCropolis update: Ver. {}", pending.header_text),
+        date: pending.date.clone(),
+        description: "A new version of ARCropolis was detected!<br/>Please read the following changelog.".to_string(),
+        entries,
+        contributors,
+    };
+
+    arcadia::show_changelog(notes, true);
+
+    if !wait_for_changelog_choice() {
+        return;
+    }
+
+    arcadia::set_update_progress(arcadia::UpdateProgress::Downloading);
+
+    if !update::install(pending) {
+        arcadia::set_update_progress(arcadia::UpdateProgress::Failed);
+    }
+}
+
+#[cfg(all(feature = "online", feature = "ui"))]
+fn wait_for_changelog_choice() -> bool {
+    const POLL_MS: u64 = 500;
+    const POLLS: u32 = 30 * 60 * 1000 / POLL_MS as u32;
+
+    for _ in 0..POLLS {
+        if let Some(choice) = arcadia::take_changelog_choice() {
+            return choice;
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(POLL_MS));
+    }
+
+    info!("Nobody answered the update offer, dropping it for this boot");
+    false
 }
 
 #[skyline::hook(offset = offsets::initial_loading(), inline)]
 fn initial_loading(_ctx: &InlineCtx) {
 
-    #[cfg(feature = "online")]
+    #[cfg(feature = "ui")]
     check_for_changelog();
 
     #[cfg(feature = "online")]
@@ -339,7 +376,7 @@ fn initial_loading(_ctx: &InlineCtx) {
 fn change_version_string(arg: u64, string: *const c_char) {
     let original_str = unsafe { skyline::from_c_str(string) };
 
-    if original_str.contains("Ver.") {
+    if original_str.starts_with("Ver.") {
         let new_str = format!(
             "Smash {}\nARCropolis Ver. {}\0",
             original_str,
@@ -367,14 +404,23 @@ fn change_version_string(arg: u64, string: *const c_char) {
 // pub fn stop_all_bgm();
 
 #[skyline::hook(offset = offsets::eshop_button())]
-fn show_eshop() {
+fn show_eshop(lua: *mut u64) -> u64 {
     // stop_all_bgm();
     // let instance = (*(offsets::offset_to_addr(0x532d8d0) as *const u64));
     // play_bgm(instance as _, 0xd9ffff202a04c55b, false);
 
     #[cfg(feature = "ui")]
-    menus::show_main_menu();
+    {
+        // no menus to show, let the shop applet the button normally opens run
+        if !arcadia::installed() {
+            return call_original!(lua);
+        }
+
+        arcadia::request(arcadia::Request::Hub);
+        arcadia::open_from_menu();
+    }
     // play_menu_bgm();
+    0
 }
 
 #[skyline::hook(offset = offsets::msbt_text(), inline)]
@@ -549,6 +595,31 @@ pub fn main() {
     replacement::install();
     fixes::install();
     lua::install();
+
+    #[cfg(feature = "ui")]
+    {
+        let resource_root = utils::paths::resources();
+        let missing = arcadia::missing_resources(&resource_root);
+
+        if missing.is_empty() {
+            arcadia::install();
+        } else {
+            for file in &missing {
+                error!("Missing ARCropolis resource file: {}/{}", resource_root, file);
+            }
+
+            let list = missing
+                .iter()
+                .map(|file| format!("{}/{}", resource_root, file))
+                .collect::<Vec<_>>()
+                .join("<br>");
+
+            dialog_error(format!(
+                "ARCropolis is missing files it needs for its in-game menus in {}:<br>{}<br>The in-game menus are disabled for this boot. Reinstalling ARCropolis puts these files back.",
+                resource_root, list
+            ));
+        }
+    }
 
     // Wait on hashes/lut to finish
     let _ = resources.join();

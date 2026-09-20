@@ -66,6 +66,10 @@ pub mod paths {
         Utf8PathBuf::from("sd:/ultimate/arcropolis/config")
     }
 
+    pub fn resources() -> Utf8PathBuf {
+        Utf8PathBuf::from("sd:/ultimate/arcropolis/resources")
+    }
+
     pub fn logs() -> Utf8PathBuf {
         Utf8PathBuf::from("sd:/ultimate/arcropolis/logs")
     }

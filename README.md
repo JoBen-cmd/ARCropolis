@@ -8,7 +8,7 @@ ARCropolis comes built-in with a few features such as:
 
 - [Auto-updater](https://github.com/Raytwo/ARCropolis/wiki/Auto-updater)
 - [File logger](https://github.com/Raytwo/ARCropolis/wiki/File-logging)
-- [Mod manager](https://github.com/Raytwo/ARCropolis/wiki/Mod-manager)
+- [Mod manager](https://github.com/Raytwo/ARCropolis/wiki/Mod-manager), a native in-game menu, no browser
   - If you'd rather manage your mods on a PC, consider using [Quasar](https://github.com/Mowjoh/Quasar) by [Mowjoh](https://github.com/Mowjoh), letting you download mods with a one-button press on GameBanana!
 - [Workspace manager](https://github.com/Raytwo/ARCropolis/wiki/Workspaces-and-Workspace-Selector)
 - Configuration editor

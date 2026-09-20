@@ -57,6 +57,7 @@ fn generate_default_config<CS: ConfigStorage>(storage: &mut StorageHolder<CS>) -
     default_workspace.insert("Default", "presets");
 
     storage.set_field_json("workspace_list", &default_workspace)?;
+    storage.set_flag("arcadia_help_entry", true)?;
     storage.set_field("workspace", "Default")
 }
 
@@ -129,8 +130,9 @@ pub mod workspaces {
         #[error("a workspace with this name already exists")]
         AlreadyExists,
         #[error("failed to find workspace with name: {0}")]
-        MissingWorkspace(String), // #[error("failed to call from_str for the desired type")]
-                                  // FromStrErr,
+        MissingWorkspace(String),
+        #[error("the Default workspace cannot be deleted")]
+        CannotDeleteDefault,
     }
 
     pub fn get_list() -> Result<HashMap<String, String>, WorkspaceError> {
@@ -207,6 +209,24 @@ pub mod workspaces {
             .unwrap()
             .set_field_json("workspace_list", &workspace_list)
             .map_err(WorkspaceError::ConfigError)
+    }
+
+    pub fn delete_workspace(name: &str) -> Result<(), WorkspaceError> {
+        if name == "Default" {
+            return Err(WorkspaceError::CannotDeleteDefault);
+        }
+
+        let mut workspace_list = get_list()?;
+        workspace_list.remove(name).ok_or_else(|| WorkspaceError::MissingWorkspace(name.to_string()))?;
+
+        let mut storage = GLOBAL_CONFIG.lock().unwrap();
+        storage.set_field_json("workspace_list", &workspace_list)?;
+
+        if storage.get_field::<String>("workspace")? == name {
+            storage.set_field("workspace", "Default")?;
+        }
+
+        Ok(())
     }
 }
 

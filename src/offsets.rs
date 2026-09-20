@@ -1,37 +1,8 @@
-use std::{fmt::Write, sync::LazyLock};
+use std::sync::LazyLock;
 
-use lazysimd;
 use serde::{Deserialize, Serialize};
-use skyline::hooks::{getRegionAddress, Region};
 
-static OFFSETS: LazyLock<Offsets> = LazyLock::new(|| {
-    let path = crate::utils::paths::cache().join("offsets.toml");
-    let offsets = match std::fs::read_to_string(&path) {
-        Ok(string) => match toml::de::from_str(string.as_str()) {
-            Ok(offsets) => Some(offsets),
-            Err(err) => {
-                error!("Unable to parse 'offsets.toml'. Reason: {:?}", err);
-                Offsets::new()
-            },
-        },
-        Err(err) => {
-            error!("Unable to read 'offsets.toml'. Reason: {:?}", err);
-            Offsets::new()
-        },
-    }
-    .expect("unable to find subsequence");
-
-    match toml::ser::to_string_pretty(&offsets) {
-        Ok(string) => {
-            if std::fs::write(path, string.as_bytes()).is_err() {
-                error!("Unable to write 'offsets.toml'.")
-            }
-        },
-        Err(_) => error!("Failed to serialize offsets."),
-    }
-
-    offsets
-});
+static OFFSETS: LazyLock<Offsets> = LazyLock::new(|| patterns::load_or_build("offsets.toml", Offsets::new));
 
 // Search Code: Tuple(ByteArray, Offset)
 
@@ -422,45 +393,24 @@ static LUA_PUSHSTRING_CODE: (&[u8], isize) = (
 
 #[allow(clippy::inconsistent_digit_grouping)]
 fn offset_from_adrp(adrp_offset: usize) -> usize {
-    unsafe {
-        let adrp = *(offset_to_addr(adrp_offset) as *const u32);
-        let immhi = (adrp & 0b0000_0000_1111_1111_1111_1111_1110_0000) >> 3;
-        let immlo = (adrp & 0b0110_0000_0000_0000_0000_0000_0000_0000) >> 29;
-        let imm = ((immhi | immlo) << 12) as i32 as usize;
-        let base = adrp_offset & 0xFFFF_FFFF_FFFF_F000;
-        base + imm
-    }
+    patterns::adrp_page(get_text(), adrp_offset)
 }
 
-#[allow(clippy::inconsistent_digit_grouping)]
 fn offset_from_ldr(ldr_offset: usize) -> usize {
-    unsafe {
-        let ldr = *(offset_to_addr(ldr_offset) as *const u32);
-        let size = (ldr & 0b1100_0000_0000_0000_0000_0000_0000_0000) >> 30;
-        let imm = (ldr & 0b0000_0000_0011_1111_1111_1100_0000_0000) >> 10;
-        (imm as usize) << size
-    }
+    patterns::ldr_imm(get_text(), ldr_offset)
 }
 
 // This also works for 'add' instructions
-#[allow(clippy::inconsistent_digit_grouping)]
 fn offset_from_strb_unsigned_immediate(strb_offset: usize) -> usize {
-    unsafe {
-        let strb = *(offset_to_addr(strb_offset) as *const u32);
-        ((strb & 0b00000_000_00_111111111111_00000_00000) >> 10) as usize
-    }
+    patterns::add_imm(get_text(), strb_offset)
 }
 
 pub fn offset_to_addr(offset: usize) -> *const () {
-    unsafe { (getRegionAddress(Region::Text) as *const u8).add(offset) as _ }
+    patterns::offset_to_addr(offset)
 }
 
 fn get_text() -> &'static [u8] {
-    unsafe {
-        let ptr = getRegionAddress(Region::Text) as *const u8;
-        let size = (getRegionAddress(Region::Rodata) as usize) - (ptr as usize);
-        std::slice::from_raw_parts(ptr, size)
-    }
+    patterns::text()
 }
 
 macro_rules! generate_members {
@@ -658,15 +608,6 @@ impl Offsets {
     }
 }
 
-// Don't go and steal that stuff, it's definitely not finished
 pub fn get_offset_neon(data: &[u8], pattern: (&'static [u8], isize)) -> usize {
-    let mut s = String::new();
-
-    for byte in pattern.0 {
-        write!(&mut s, "{:X} ", byte).expect("lmao");
-    }
-
-    write!(&mut s, "??").expect("lmao");
-
-    ((lazysimd::find_pattern_neon(data.as_ptr(), data.len(), s).expect("lmao") as isize) + pattern.1) as usize
+    patterns::find_bytes(data, pattern).expect("a byte pattern was not found in this game version")
 }

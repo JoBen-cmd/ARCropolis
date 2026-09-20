@@ -7,7 +7,7 @@ use owo_colors::OwoColorize;
 use smash_arc::*;
 use walkdir::WalkDir;
 
-use crate::{hashes, resource, utils};
+use crate::{hashes, resource};
 
 #[no_mangle]
 pub extern "C" fn arcrop_load_file(hash: Hash40, out_buffer: *mut u8, buf_length: usize, out_size: &mut usize) -> bool {
@@ -82,7 +82,7 @@ pub extern "C" fn arcrop_is_mod_enabled(hash: Hash40) -> bool {
 fn enabled_mods() -> HashSet<Hash40> {
     let storage = config::GLOBAL_CONFIG.lock().unwrap();
 
-    if storage.get_flag("legacy_discovery") || utils::env::is_emulator() {
+    if storage.get_flag("legacy_discovery") {
         WalkDir::new(crate::utils::paths::mods())
             .max_depth(1)
             .into_iter()

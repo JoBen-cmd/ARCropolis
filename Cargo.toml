@@ -6,9 +6,9 @@ edition = "2018"
 
 [package.metadata.skyline]
 titleid = "01006A800016E000"
-# package-resources = [
-#     { local = "changelog.toml", package = "ultimate/arcropolis/changelog.toml" }
-# ]
+package-resources = [
+    { local = "resources/arcadia", package = "ultimate/arcropolis/resources" }
+]
 
 [lib]
 crate-type = ["cdylib"]
@@ -60,9 +60,9 @@ smash-bgm-property = "1.2.0"
 # For inputs
 ninput = { git = "https://github.com/blu-dev/ninput" }
 # For Offset Searching
-lazysimd = { git = "https://github.com/Raytwo/lazysimd" }
+patterns = { path = "crates/patterns" }
 config = { path = "crates/config" }
-menus = { path = "crates/menus", optional = true }
+arcadia = { path = "crates/arcadia", optional = true }
 
 [patch.crates-io]
 # Specifying latest commit because git only doesn't use latest changes
@@ -71,7 +71,7 @@ native-tls = { git = "https://github.com/skyline-rs/rust-native-tls", rev = "f20
 [features]
 default = ["ui", "online"]
 online = ["zip", "gh-updater", "minreq"]
-ui = ["dep:menus"]
+ui = ["dep:arcadia"]
 
 [profile.dev]
 panic = "abort"

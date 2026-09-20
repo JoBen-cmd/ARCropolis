@@ -82,8 +82,12 @@ impl CachedFilesystem {
     }
 
     /// Use the file information that was generated during file discovery to fill out a GlobalFilesystem struct
-    pub fn make_from_promise(discovery: DiscoveryResult) -> CachedFilesystem {
+    pub fn make_from_promise(mut discovery: DiscoveryResult) -> CachedFilesystem {
         let arc = resource::arc();
+
+        let extra = discover::walk_extra_root(&crate::utils::paths::resources());
+        info!("Loaded {} file(s) from the ARCropolis resources folder.", extra.len());
+        discovery.entries.extend(extra);
 
         // Load the default config, which we will then join with the other configs
         let mut config = match ModConfig::from_json(DEFAULT_CONFIG) {

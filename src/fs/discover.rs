@@ -111,21 +111,39 @@ fn walk_one_root(mod_root: &Path, region: Region) -> RootWalk {
     RootWalk { staged_tree, staged_collected }
 }
 
-pub fn perform_discovery() -> DiscoveryResult {
-    let is_emulator = utils::env::is_emulator();
+pub fn walk_extra_root(root: &Utf8Path) -> Vec<(PathBuf, PathBuf, usize)> {
+    let root = root.as_std_path();
 
-    if is_emulator {
-        info!("Emulator usage detected in perform_discovery, reverting to old behavior.");
+    if !root.is_dir() {
+        return Vec::new();
     }
 
+    let RootWalk { staged_tree, staged_collected } = walk_one_root(root, config::region());
+
+    let mut entries: Vec<(PathBuf, PathBuf, usize)> = Vec::new();
+
+    for (local, size) in staged_tree {
+        entries.push((root.to_path_buf(), local, size));
+    }
+
+    for (local, size) in staged_collected {
+        if local.file_name().and_then(|n| n.to_str()) == Some("plugin.nro") {
+            continue;
+        }
+        entries.push((root.to_path_buf(), local, size));
+    }
+
+    entries
+}
+
+pub fn perform_discovery() -> DiscoveryResult {
     let mods_path = utils::paths::mods();
 
     let legacy_discovery = config::legacy_discovery();
 
     let mut presets = config::presets::get_active_preset().unwrap();
 
-    // Emulators can't use presets, so don't run this logic
-    if !is_emulator && !legacy_discovery {
+    if !legacy_discovery {
         // Get the mod cache from last run
         let mod_cache: HashSet<Hash40> = config::get_mod_cache().unwrap_or_default();
 
@@ -160,13 +178,13 @@ pub fn perform_discovery() -> DiscoveryResult {
         config::set_mod_cache(&new_cache).unwrap();
     }
 
-    #[cfg(feature = "ui")]
-    crate::check_input_on_boot();
+    // #[cfg(feature = "ui")]
+    // crate::check_input_on_boot();
 
     let presets = config::presets::get_active_preset().unwrap();
 
     let is_active_root = |path: &Path| {
-        if !is_emulator && !legacy_discovery {
+        if !legacy_discovery {
             presets.contains(&Hash40::from(path.to_str().unwrap()))
         } else {
             Utf8Path::from_path(path)
