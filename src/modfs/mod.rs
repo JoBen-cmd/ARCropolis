@@ -1,20 +1,23 @@
 use std::{
+    collections::HashSet,
     io::Read,
     path::{Path, PathBuf},
 };
 
 use arc_config::Config as ModConfig;
-use smash_arc::{ArcLookup, Hash40, LookupError};
+use smash_arc::{ArcLookup, Hash40, LookupError, Region};
 use thiserror::Error;
 
 pub mod discovery;
 pub mod handlers;
 pub mod patch;
+pub mod patched;
 pub mod registry;
 pub mod virt;
 
 pub use discovery::DiscoveryContext;
 pub use patch::PatchLayer;
+pub use patched::{MaterialiseReport, PatchedIndex};
 pub use registry::{FileHandler, HandlerRegistry};
 pub use virt::{VirtualEntry, VirtualLayer};
 
@@ -71,6 +74,7 @@ pub struct ModFs {
     handlers: HandlerRegistry,
     conflict_mode: ConflictMode,
     dir_index: std::sync::RwLock<Option<DirIndex>>,
+    patched: PatchedIndex,
 }
 
 struct DirIndex {
@@ -114,6 +118,7 @@ impl ModFs {
             handlers,
             conflict_mode: ConflictMode::default(),
             dir_index: std::sync::RwLock::new(None),
+            patched: PatchedIndex::new(),
         }
     }
 
@@ -169,23 +174,23 @@ impl ModFs {
         &mut self.handlers
     }
 
-    pub fn read(&self, path: &Path) -> Result<Vec<u8>, ModFsError> {
-        let bytes = if let Some(entry) = self.patch.get(path) {
-            std::fs::read(entry.full_path(path))?
-        } else {
-            let hash = crate::PathExtension::smash_hash(path)?;
-            let arc = crate::resource::arc();
-            arc.get_file_contents(hash, config::region())?
-        };
+    pub fn patched(&self) -> &PatchedIndex {
+        &self.patched
+    }
 
+    pub fn read(&self, path: &Path) -> Result<Vec<u8>, ModFsError> {
         let hash = crate::PathExtension::smash_hash(path)?;
-        self.handlers.apply_chain(hash, bytes)
+        self.read_base(hash)
     }
 
     pub fn size(&self, path: &Path) -> Option<usize> {
         if let Ok(hash) = crate::PathExtension::smash_hash(path) {
             if let Some(s) = self.virt.max_size(hash) {
                 return Some(s);
+            }
+            if let Some(len) = self.patched.len(hash) {
+                debug!("mods:/ size '{}' {:#x} bytes from blob", path.display(), len);
+                return Some(len);
             }
             let base = self.patch.get(path).map(|e| e.size)?;
             return Some(self.handlers.patched_size_for_hash(hash, base).unwrap_or(base));
@@ -243,28 +248,30 @@ impl ModFs {
             }
         }
 
+        if let Some(entry) = self.patched.get(hash) {
+            match patched::read_into(entry, buffer) {
+                Ok(size) => {
+                    debug!(
+                        "served '{}' ({:#x}) {:#x} bytes from blob",
+                        crate::hashes::find(hash),
+                        hash.0,
+                        size
+                    );
+                    return Ok(size);
+                },
+                Err(e) => warn!(
+                    "patched cache: could not serve '{}' ({:#x}) from its blob: {:?}",
+                    crate::hashes::find(hash),
+                    hash.0,
+                    e
+                ),
+            }
+        }
+
         if self.handlers.handlers_for_hash(hash).is_empty() {
             if let Some((local, entry)) = self.patch.entry_for_hash(hash) {
-                let mut file = std::fs::File::open(entry.full_path(local))?;
-                let mut read = 0;
-                loop {
-                    if read == buffer.len() {
-                        // Buffer is full, anything left in the file means it doesn't fit
-                        let mut probe = [0u8; 1];
-                        if file.read(&mut probe)? == 0 {
-                            return Ok(read);
-                        }
-                        return Err(ModFsError::BufferTooSmall {
-                            needed: entry.size,
-                            available: buffer.len(),
-                        });
-                    }
-                    let n = file.read(&mut buffer[read..])?;
-                    if n == 0 {
-                        return Ok(read);
-                    }
-                    read += n;
-                }
+                let file = std::fs::File::open(entry.full_path(local))?;
+                return stream_into(file, buffer, entry.size);
             }
         }
 
@@ -290,14 +297,180 @@ impl ModFs {
         }
     }
 
+    fn raw_base(&self, hash: Hash40) -> Result<(Vec<u8>, Option<PathBuf>), ModFsError> {
+        if let Some((local, entry)) = self.patch.entry_for_hash(hash) {
+            let path = entry.full_path(local);
+            let bytes = std::fs::read(&path)?;
+            return Ok((bytes, Some(path)));
+        }
+        let arc = crate::resource::arc();
+        Ok((arc.get_file_contents(hash, config::region())?, None))
+    }
+
     pub fn read_base(&self, hash: Hash40) -> Result<Vec<u8>, ModFsError> {
-        let bytes = if let Some((local, entry)) = self.patch.entry_for_hash(hash) {
-            std::fs::read(entry.full_path(local))?
-        } else {
-            let arc = crate::resource::arc();
-            arc.get_file_contents(hash, config::region())?
-        };
+        if let Some(entry) = self.patched.get(hash) {
+            match patched::read(entry) {
+                Ok(bytes) => {
+                    debug!(
+                        "served '{}' ({:#x}) {:#x} bytes from blob",
+                        crate::hashes::find(hash),
+                        hash.0,
+                        bytes.len()
+                    );
+                    return Ok(bytes);
+                },
+                Err(e) => warn!(
+                    "patched cache: could not serve '{}' ({:#x}) from its blob: {:?}",
+                    crate::hashes::find(hash),
+                    hash.0,
+                    e
+                ),
+            }
+        }
+
+        let (bytes, _) = self.raw_base(hash)?;
+        if self.handlers.has_load_patchers(hash) {
+            debug!(
+                "running handler chain at load for '{}' ({:#x})",
+                crate::hashes::find(hash),
+                hash.0
+            );
+        }
         self.handlers.apply_chain(hash, bytes)
+    }
+
+    pub fn materialise_patched(&mut self, region: Region) -> MaterialiseReport {
+        let mut report = MaterialiseReport::default();
+        self.patched.clear();
+
+        if !patched::enabled() {
+            report.disabled = true;
+            info!("patched cache: disabled by ARCROP_PATCH_CACHE, handler chains run at load");
+            return report;
+        }
+
+        let start = std::time::Instant::now();
+        let dir = patched::dir();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!("patched cache: could not create {} ({}), keeping size estimates", dir.display(), e);
+            report.elapsed_ms = start.elapsed().as_millis();
+            return report;
+        }
+
+        let arc = crate::resource::arc();
+        let targets: Vec<Hash40> = self
+            .handlers
+            .bound_hashes()
+            .filter(|hash| self.handlers.has_load_patchers(*hash))
+            .collect();
+        let mut keep: HashSet<Hash40> = HashSet::with_capacity(targets.len());
+
+        for hash in targets {
+            let (base_size, base_path) = match self.patch.entry_for_hash(hash) {
+                Some((local, entry)) => (entry.size, Some(entry.full_path(local))),
+                None => match arc.get_file_data_from_hash(hash, region) {
+                    Ok(data) => (data.decomp_size as usize, None),
+                    Err(_) => {
+                        debug!(
+                            "patched cache: no base file for '{}' ({:#x}), skipping",
+                            crate::hashes::find(hash),
+                            hash.0
+                        );
+                        continue;
+                    },
+                },
+            };
+
+            let mut sources: Vec<patched::SourceStamp> =
+                self.handlers.sources_for_hash(hash).iter().map(|path| patched::stamp(path)).collect();
+            if let Some(path) = base_path.as_ref() {
+                sources.push(patched::stamp(path));
+            }
+            for source in &sources {
+                debug!(
+                    "patched cache: source {} size {:#x} mtime {}",
+                    source.path.display(),
+                    source.size,
+                    source.mtime
+                );
+            }
+
+            let chain = self.handlers.chain_names(hash);
+            let key = patched::key(region, base_size, &chain, &sources);
+            let estimate = self.handlers.patched_size_for_hash(hash, base_size).unwrap_or(base_size);
+            let source_count = sources.len();
+            drop(sources);
+
+            if let Some(entry) = patched::probe(hash, key) {
+                debug!(
+                    "patched cache: hit '{}' ({:#x}) {:#x} bytes key {:#x}",
+                    crate::hashes::find(hash),
+                    hash.0,
+                    entry.len,
+                    key
+                );
+                report.hits += 1;
+                keep.insert(hash);
+                self.patched.insert(hash, entry);
+                continue;
+            }
+
+            let bytes = match self.raw_base(hash).and_then(|(bytes, _)| self.handlers.apply_chain(hash, bytes)) {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    warn!(
+                        "patched cache: could not patch '{}' ({:#x}): {:?}, keeping the {:#x} byte estimate",
+                        crate::hashes::find(hash),
+                        hash.0,
+                        e,
+                        estimate
+                    );
+                    report.failed += 1;
+                    continue;
+                },
+            };
+
+            match patched::write(hash, key, &bytes) {
+                Ok(entry) => {
+                    debug!(
+                        "patched cache: wrote '{}' ({:#x}) {:#x} bytes (vanilla {:#x}, estimate was {:#x}) key {:#x} from {} sources",
+                        crate::hashes::find(hash),
+                        hash.0,
+                        entry.len,
+                        base_size,
+                        estimate,
+                        key,
+                        source_count
+                    );
+                    report.written += 1;
+                    keep.insert(hash);
+                    self.patched.insert(hash, entry);
+                },
+                Err(e) => {
+                    warn!(
+                        "patched cache: could not write the blob for '{}' ({:#x}): {}, keeping the {:#x} byte estimate",
+                        crate::hashes::find(hash),
+                        hash.0,
+                        e,
+                        estimate
+                    );
+                    report.failed += 1;
+                },
+            }
+        }
+
+        report.pruned = patched::prune(&keep);
+        report.elapsed_ms = start.elapsed().as_millis();
+        info!(
+            "patched cache: {} hit, {} written, {} kept estimates, {} orphans removed in {} ms at {}",
+            report.hits,
+            report.written,
+            report.failed,
+            report.pruned,
+            report.elapsed_ms,
+            dir.display()
+        );
+        report
     }
 
     pub fn resolve_stream_path(&self, hash: Hash40) -> Option<(std::path::PathBuf, usize)> {
@@ -322,6 +495,28 @@ impl ModFs {
 
         let (local, entry) = self.patch.entry_for_hash(hash)?;
         Some((entry.full_path(local), entry.size))
+    }
+}
+
+fn stream_into(mut file: std::fs::File, buffer: &mut [u8], needed: usize) -> Result<usize, ModFsError> {
+    let mut read = 0;
+    loop {
+        if read == buffer.len() {
+            // Buffer is full, anything left in the file means it doesn't fit
+            let mut probe = [0u8; 1];
+            if file.read(&mut probe)? == 0 {
+                return Ok(read);
+            }
+            return Err(ModFsError::BufferTooSmall {
+                needed,
+                available: buffer.len(),
+            });
+        }
+        let n = file.read(&mut buffer[read..])?;
+        if n == 0 {
+            return Ok(read);
+        }
+        read += n;
     }
 }
 

@@ -122,4 +122,8 @@ impl FileHandler for MotionListHandler {
     fn patched_size(&self, _hash: Hash40, base_size: usize) -> usize {
         base_size * 2
     }
+
+    fn sources(&self, hash: Hash40) -> Vec<PathBuf> {
+        self.patches.get(&hash).cloned().unwrap_or_default()
+    }
 }

@@ -96,4 +96,8 @@ impl FileHandler for Nus3audioHandler {
         original.write(&mut out);
         Ok(out)
     }
+
+    fn sources(&self, hash: Hash40) -> Vec<PathBuf> {
+        self.patches.get(&hash).cloned().unwrap_or_default()
+    }
 }

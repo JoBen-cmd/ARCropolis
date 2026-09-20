@@ -91,4 +91,7 @@ impl FileHandler for PrcHandler {
         base_size * 2
     }
 
+    fn sources(&self, hash: Hash40) -> Vec<PathBuf> {
+        self.patches.get(&hash).cloned().unwrap_or_default()
+    }
 }
