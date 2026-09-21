@@ -43,12 +43,11 @@ impl ModFs {
                     Hash40(0)
                 },
             };
-            self.patch.insert(local.clone(), entry, hash);
-
             if let Some(s) = local.to_str() {
                 crate::hashes::add(s);
             }
 
+            let mut patches_itself = false;
             if let Some(handler_id) = self.handlers.lookup(local) {
                 handler_counts[handler_id.0] += 1;
                 let mut ctx = DiscoveryContext::new(&mut self.patch, config);
@@ -59,10 +58,20 @@ impl ModFs {
                     }
                     std::mem::take(&mut ctx.bindings)
                 };
-                for (hash, id) in bindings {
-                    self.handlers.bind_hash(hash, id);
+                for (target, id) in bindings {
+                    if target == hash {
+                        patches_itself = true;
+                    }
+                    self.handlers.bind_hash(target, id);
                 }
             }
+
+            if patches_itself {
+                debug!("'{}' from {} is a patch for itself, not a replacement", local.display(), root.display());
+                continue;
+            }
+
+            self.patch.insert(local.clone(), entry, hash);
         }
 
         (0..self.handlers.len())

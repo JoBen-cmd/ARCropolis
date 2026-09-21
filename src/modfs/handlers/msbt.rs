@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io::Cursor,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine};
@@ -47,6 +47,7 @@ struct ParsedPatch {
 #[derive(Default)]
 pub struct MsbtHandler {
     patches: HashMap<Hash40, Vec<ParsedPatch>>,
+    sources: HashMap<Hash40, Vec<PathBuf>>,
 }
 
 fn parse_patch(path: &Path) -> Option<ParsedPatch> {
@@ -122,6 +123,7 @@ impl FileHandler for MsbtHandler {
         };
 
         let hash = super::try_smash_hash(&base_local)?;
+        self.sources.entry(hash).or_default().push(full_path.to_path_buf());
 
         if let Some(parsed) = parse_patch(full_path) {
             self.patches.entry(hash).or_default().push(parsed);
@@ -181,6 +183,10 @@ impl FileHandler for MsbtHandler {
 
     fn patched_size(&self, _hash: Hash40, base_size: usize) -> usize {
         base_size * 2
+    }
+
+    fn sources(&self, hash: Hash40) -> Vec<PathBuf> {
+        self.sources.get(&hash).cloned().unwrap_or_default()
     }
 }
 

@@ -101,6 +101,8 @@ impl CachedFilesystem {
         let mut modfs = Self::build_modfs(&discovery.entries, &mut config);
         modfs.finalize(&mut config);
 
+        modfs.materialise_patched(config::region());
+
         inference::merge_into_config(&discovery.entries, &mut config);
 
         drop(discovery);
@@ -112,7 +114,11 @@ impl CachedFilesystem {
         for hash in modfs.handlers().bound_hashes() {
             if let Ok(data) = arc.get_file_data_from_hash(hash, config::region()) {
                 let base_size = data.decomp_size as usize;
-                let size = modfs.handlers().patched_size_for_hash(hash, base_size).unwrap_or(base_size);
+                let size = modfs
+                    .patched()
+                    .len(hash)
+                    .or_else(|| modfs.handlers().patched_size_for_hash(hash, base_size))
+                    .unwrap_or(base_size);
                 hashed_paths.insert(hash, get_path_from_hash(hash));
                 hashed_sizes.insert(hash, size);
             }

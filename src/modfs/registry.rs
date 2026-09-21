@@ -1,4 +1,7 @@
-use std::{collections::HashMap, path::Path};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
 
 use arc_config::Config as ModConfig;
 use smash_arc::Hash40;
@@ -29,6 +32,10 @@ pub trait FileHandler: Send + Sync + 'static {
 
     fn apply(&self, _hash: Hash40, bytes: Vec<u8>) -> Result<Vec<u8>, ModFsError> {
         Ok(bytes)
+    }
+
+    fn sources(&self, _hash: Hash40) -> Vec<PathBuf> {
+        Vec::new()
     }
 
     fn patched_size(&self, _hash: Hash40, base_size: usize) -> usize {
@@ -102,6 +109,18 @@ impl HandlerRegistry {
 
     pub fn bound_hashes(&self) -> impl Iterator<Item = Hash40> + '_ {
         self.by_hash.keys().copied()
+    }
+
+    pub fn sources_for_hash(&self, hash: Hash40) -> Vec<PathBuf> {
+        let mut sources = Vec::new();
+        for id in self.handlers_for_hash(hash) {
+            sources.extend(self.handlers[id.0].sources(hash));
+        }
+        sources
+    }
+
+    pub fn chain_names(&self, hash: Hash40) -> Vec<&'static str> {
+        self.handlers_for_hash(hash).iter().map(|id| self.handlers[id.0].name()).collect()
     }
 
     pub fn has_load_patchers(&self, hash: Hash40) -> bool {
