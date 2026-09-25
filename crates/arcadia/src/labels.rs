@@ -6,6 +6,8 @@ pub const HDR_SCENE_LEVEL: &str = "mnu_arcadia_hdr_scene_level";
 pub const HDR_SCENE_WORKSPACE: &str = "mnu_arcadia_hdr_scene_workspace";
 pub const HDR_SCENE_NOTES: &str = "mnu_arcadia_hdr_scene_notes";
 
+pub const HDR_SCENE_HELLO: &str = "mnu_acadia_hdr_scene_hello";
+
 pub const FTR_UPDATE: &str = "mnu_arcadia_ftr_update";
 pub const FTR_NOTES_UPDATE: &str = "mnu_arcadia_ftr_notes_update";
 pub const FTR_NOTES_READ: &str = "mnu_arcadia_ftr_notes_read";

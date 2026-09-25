@@ -39,6 +39,7 @@ pub enum Request {
     Hub,
     ModManager,
     Config,
+    HDR,
     Changelog,
 }
 
