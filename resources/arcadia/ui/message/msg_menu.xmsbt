@@ -22,7 +22,7 @@
   <entry label="mnu_arcadia_hdr_scene_workspace"><text>Workspaces</text></entry>
   <entry label="mnu_arcadia_hdr_scene_notes"><text>Update notes</text></entry>
 
-  <entry label ="mnu_acadia_hdr_scene_hello"><text>Hello Mario</text></entry>
+  <entry label="mnu_acadia_hdr_scene_hello"><text>Hello Mario</text></entry>
 
   <entry label="mnu_arcadia_ftr_hub_0"><text>Enable or disable mods and see their previews</text></entry>
   <entry label="mnu_arcadia_ftr_hub_1"><text>Switch between mod workspaces</text></entry>
